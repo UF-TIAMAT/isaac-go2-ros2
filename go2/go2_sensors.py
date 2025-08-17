@@ -40,5 +40,6 @@ class SensorManager:
             )
             camera.initialize()
             camera.set_focal_length(1.5)
+            camera.add_distance_to_image_plane_to_frame() # to get depth in meters
             cameras.append(camera)
         return cameras
