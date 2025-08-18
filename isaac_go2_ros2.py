@@ -5,6 +5,8 @@ import torch
 import time
 import math
 import argparse
+from transfer.cosine_similarity import HFClipITC
+
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
@@ -44,6 +46,8 @@ def run_simulator(cfg):
     # env, policy = go2_ctrl.get_rsl_flat_policy(go2_env_cfg)
     env, policy = go2_ctrl.get_rsl_rough_policy(go2_env_cfg)
 
+    similarity_model = HFClipITC()
+
     # Simulation environment
     if (cfg.env_name == "obstacle-dense"):
         sim_env.create_obstacle_dense_env() # obstacles dense
@@ -77,14 +81,54 @@ def run_simulator(cfg):
     # Run simulation
     sim_step_dt = float(go2_env_cfg.sim.dt * go2_env_cfg.decimation)
     obs, _ = env.reset()
+
+    # # Limit num steps
+    # max_steps = 100
+    # step_count = 0
+
+
     while simulation_app.is_running():
         start_time = time.time()
+
+        # if step_count >= max_steps:
+        #     break
+
         with torch.inference_mode():            
             # control joints
             actions = policy(obs)
 
             # step the environment
             obs, _, _, _ = env.step(actions)
+
+            OBJECT_NAME = "Robot"
+            PROMPT = f"{OBJECT_NAME}"
+            threashold = 0.1    
+            lin_vel = 1.5 
+
+            rgb = cameras[0].get_rgb()
+
+            if rgb.shape == (480, 640, 3):
+                cosine_similarity = similarity_model.cosine_image_text(cameras[0].get_rgb(), PROMPT)
+                print(f"\rCosine similarity: {cosine_similarity:.4f} - {PROMPT}", end='', flush=True)
+
+                if cosine_similarity > threashold:
+                    # Move forward
+                    go2_ctrl.base_vel_cmd_input[0] = torch.tensor([lin_vel, 0, 0], dtype=torch.float32)
+
+
+            # # NOTE: Temporary, save observations
+            # import pickle
+            # save_path = '/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/results/August/08-17/'
+            # if not os.path.exists(save_path):
+            #     os.makedirs(save_path)
+            # with open(f'{save_path}/rgb/rgb_{step_count}.pkl', 'wb') as f:
+            #     pickle.dump(cameras[0].get_rgb(), f)
+
+            # with open(f'{save_path}/depth/depth_{step_count}.pkl', 'wb') as f:
+            #     pickle.dump(cameras[0].get_depth(), f)
+            
+            # step_count += 1
+
 
             # # ROS2 data
             dm.pub_ros2_data()
