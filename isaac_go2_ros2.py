@@ -8,7 +8,6 @@ import argparse
 import yaml
 from PIL import Image
 from datetime import datetime
-from transfer.cosine_similarity import HFBLIP2ImageTextRetrieval
 
 from isaaclab.app import AppLauncher
 
@@ -35,8 +34,12 @@ import omni
 import carb
 import go2.go2_ctrl as go2_ctrl
 import ros2.go2_ros2_bridge as go2_ros2_bridge
+from transfer.navigation import vlfm_navigation, NavigationState
+from transfer.cosine_similarity import HFBLIP2ImageTextRetrieval
 
 FILE_PATH = os.path.join(os.path.dirname(__file__), "cfg")
+
+
 @hydra.main(config_path=FILE_PATH, config_name="sim", version_base=None)
 def run_simulator(cfg):
 
@@ -84,6 +87,7 @@ def run_simulator(cfg):
     # Run simulation
     sim_step_dt = float(go2_env_cfg.sim.dt * go2_env_cfg.decimation)
     obs, _ = env.reset()
+    navigation_state = NavigationState.EXPLORATION
 
     # # Limit num steps
     # max_steps = 100
@@ -103,58 +107,52 @@ def run_simulator(cfg):
             # step the environment
             obs, _, _, _ = env.step(actions)
 
-            threashold = 0.4    
+            threashold = 0.45    
             lin_vel = 1.5 
-            step_count = 0 
+            step_count = 0  
             max_steps = 100
+
+            with open("/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/cfg/debug.yaml", ) as f:
+                            debug_cfg = yaml.safe_load(f)
 
             # Get RGB and Depth data
             rgb = cameras[0].get_rgb()
             depth = cameras[0].get_depth()
-
-            with open("/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/cfg/debug.yaml", ) as f:
-                debug_cfg = yaml.safe_load(f)
+            prompt = debug_cfg["prompt"]   
 
             if rgb.shape == (480, 640, 3):
+                 navigation_state = vlfm_navigation(rgb, depth, prompt, navigation_state, similarity_model, threashold)
+                
 
-                PROMPT = debug_cfg["prompt"]
+            # NOTE: This for debugging purposes only 
+        
+            # if rgb.shape == (480, 640, 3):
 
-                cosine_similarity = similarity_model.cosine_image_text(cameras[0].get_rgb(), PROMPT)
-                print(f"\rCosine similarity: {cosine_similarity:.4f} - {PROMPT}", end='', flush=True)
+            #     PROMPT = debug_cfg["prompt"]
 
-                if cosine_similarity > threashold:
-                    # Move forward
-                    go2_ctrl.base_vel_cmd_input[0] = torch.tensor([lin_vel, 0, 0], dtype=torch.float32)
+            #     cosine_similarity = similarity_model.cosine_image_text(cameras[0].get_rgb(), PROMPT)
+            #     go2_ctrl.base_vel_cmd_input[0] = torch.tensor([lin_vel, 0, 0], dtype=torch.float32)
 
-                if debug_cfg["debug"]:
-                    step_count += 1
+            #     print(f"\rCosine similarity: {cosine_similarity:.4f} - {PROMPT}", end='', flush=True)
 
-                    if step_count < max_steps:
-                        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                        # Image.fromarray(rgb).save(f"/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/results/August/08-18/rgb/frame_{ts}.png")
-                        with open("/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/results/August/08-18/debug.txt", "a") as f:
-                            f.write(f"{ts} - Cosine similarity: {cosine_similarity:.4f} - {PROMPT}\n")
-                else:
-                    step_count = 0
+            #     if cosine_similarity > threashold:
+            #         # Move forward
+            #         pass
+
+            #     if debug_cfg["debug"]:
+            #         step_count += 1
+
+            #         if step_count < max_steps:
+            #             ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            #             # Image.fromarray(rgb).save(f"/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/results/August/08-18/rgb/frame_{ts}.png")
+            #             with open("/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/results/August/08-18/debug.txt", "a") as f:
+            #                 f.write(f"{ts} - Cosine similarity: {cosine_similarity:.4f} - {PROMPT}\n")
+            #     else:
+            #         step_count = 0
             
 
 
 
-
-
-
-            # # NOTE: Temporary, save observations
-            # import pickle
-            # save_path = '/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/results/August/08-17/'
-            # if not os.path.exists(save_path):
-            #     os.makedirs(save_path)
-            # with open(f'{save_path}/rgb/rgb_{step_count}.pkl', 'wb') as f:
-            #     pickle.dump(cameras[0].get_rgb(), f)
-
-            # with open(f'{save_path}/depth/depth_{step_count}.pkl', 'wb') as f:
-            #     pickle.dump(cameras[0].get_depth(), f)
-            
-            # step_count += 1
 
 
             # # ROS2 data
