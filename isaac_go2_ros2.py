@@ -120,8 +120,20 @@ def run_simulator(cfg):
             depth = cameras[0].get_depth()
             prompt = debug_cfg["prompt"]   
 
+
+            # Get robot odometry 
+            robot_data = env.unwrapped.scene["unitree_go2"].data
+            odometry = {
+                 "position": robot_data.root_state_w[0, :3], #x, y, z (torch.tensor format)
+                 "rotation": robot_data.root_state_w[0, 3:7], #x, y, z, w (torch.tensor format)
+                 "linear_velocity": robot_data.root_lin_vel_b[0], #x, y, z (torch.tensor format)
+                 "angular_velocity": robot_data.root_ang_vel_b[0] #x, y, z (torch.tensor format)
+            }
+
+
+
             if rgb.shape == (480, 640, 3):
-                 navigation_state = vlfm_navigation(rgb, depth, prompt, navigation_state, similarity_model, threashold)
+                 navigation_state = vlfm_navigation(rgb, depth, prompt, navigation_state, similarity_model, threashold, odometry)
                 
 
             # NOTE: This for debugging purposes only 

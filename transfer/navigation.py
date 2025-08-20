@@ -13,8 +13,8 @@ class NavigationState(Enum):
     STOP = 3
     
 
-def vlfm_navigation(rgb: np.ndarray, depth: np.ndarray, prompt: str, navstate: NavigationState, similarity_model: HFBLIP2ImageTextRetrieval, threshold: float = 0.5) -> NavigationState:
-    
+def vlfm_navigation(rgb: np.ndarray, depth: np.ndarray, prompt: str, navstate: NavigationState, similarity_model: HFBLIP2ImageTextRetrieval, threshold: float = 0.5, odometry: dict = None) -> NavigationState:
+
     cosine_similarity = similarity_model.cosine_image_text(rgb, prompt)
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -50,12 +50,15 @@ def vlfm_navigation(rgb: np.ndarray, depth: np.ndarray, prompt: str, navstate: N
             if left_cosine > right_cosine and left_cosine > middle_cosine:
                 # Turn left
                 go2_ctrl.base_vel_cmd_input[0] = torch.tensor([0.0, 0.0, velocity_value], dtype=torch.float32)
+                # go2_ctrl.base_vel_cmd_input[0] = torch.tensor([velocity_value, velocity_value/10, 0.0], dtype=torch.float32)
             elif right_cosine > left_cosine and right_cosine > middle_cosine:
                 # Turn right
                 go2_ctrl.base_vel_cmd_input[0] = torch.tensor([0.0, 0.0, -velocity_value], dtype=torch.float32)
             else:
                 # Move forward if middle cosine similarity is the highest
                 go2_ctrl.base_vel_cmd_input[0] = torch.tensor([velocity_value, 0.0, 0.0], dtype=torch.float32)
+                # go2_ctrl.base_vel_cmd_input[0] = torch.tensor([velocity_value, -velocity_value/10, 0.0], dtype=torch.float32)
+
 
             with open("/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/results/August/08-18/debug.txt", "a") as f:
                 f.write(f"Left Cosine Value: {left_cosine}\n")
