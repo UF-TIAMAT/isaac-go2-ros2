@@ -34,7 +34,7 @@ import omni
 import carb
 import go2.go2_ctrl as go2_ctrl
 import ros2.go2_ros2_bridge as go2_ros2_bridge
-from transfer.navigation import vlfm_navigation, NavigationState
+from transfer.navigation import vlfm_navigation, NavigationState, StateStage
 from transfer.cosine_similarity import HFBLIP2ImageTextRetrieval
 
 FILE_PATH = os.path.join(os.path.dirname(__file__), "cfg")
@@ -88,6 +88,7 @@ def run_simulator(cfg):
     sim_step_dt = float(go2_env_cfg.sim.dt * go2_env_cfg.decimation)
     obs, _ = env.reset()
     navigation_state = NavigationState.EXPLORATION
+    state_stage = StateStage.START
 
     # # Limit num steps
     # max_steps = 100
@@ -133,8 +134,16 @@ def run_simulator(cfg):
 
 
             if rgb.shape == (480, 640, 3):
-                 navigation_state = vlfm_navigation(rgb, depth, prompt, navigation_state, similarity_model, threashold, odometry)
-                
+                 navigation_state = vlfm_navigation(
+                      rgb=rgb, 
+                      depth=depth, 
+                      prompt=prompt, 
+                      navstate=navigation_state, 
+                      state_stage=state_stage, 
+                      similarity_model=similarity_model, 
+                      threshold=threashold, 
+                      odometry=odometry
+            )
 
             # NOTE: This for debugging purposes only 
         

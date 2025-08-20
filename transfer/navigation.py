@@ -11,28 +11,76 @@ class NavigationState(Enum):
     EXPLORATION = 1
     NAVIGATION = 2
     STOP = 3
+
+class StateStage(Enum):
+    START = 1
+    INACTION = 2
+    END = 3
     
 
-def vlfm_navigation(rgb: np.ndarray, depth: np.ndarray, prompt: str, navstate: NavigationState, similarity_model: HFBLIP2ImageTextRetrieval, threshold: float = 0.5, odometry: dict = None) -> NavigationState:
-
-    cosine_similarity = similarity_model.cosine_image_text(rgb, prompt)
+def vlfm_navigation(rgb: np.ndarray, depth: np.ndarray, prompt: str, navstate: NavigationState, state_stage: StateStage, similarity_model: HFBLIP2ImageTextRetrieval, threshold: float = 0.5, odometry: dict = None) -> tuple(NavigationState, StateStage):
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-
     velocity_value = 0.25  # Default forward velocity/ angular velocity
 
 
     if navstate == NavigationState.EXPLORATION:
 
-        if cosine_similarity > threshold:
-            # Move forward in exploration state
-            go2_ctrl.base_vel_cmd_input[0] = torch.tensor([velocity_value, 0.0, 0.0], dtype=torch.float32)
-            navstate = NavigationState.NAVIGATION
-        else:
-            # Continue exploring by turning in place
-            go2_ctrl.base_vel_cmd_input[0] = torch.tensor([0.0, 0.0, velocity_value], dtype=torch.float32)
+        if state_stage == StateStage.START:
+            # Initially set up the angle step size. 
+            # If cosine similarity is higher, find the object position and move towards it
+            # Set state to navigation with (rotation and position)
+
+            rotation_step_count = 0
+            max_rotation_steps = 8
+            rotation_per_step = 2 * np.pi / max_rotation_steps
+            current_angle = 0
+            goal_angle = rotation_per_step
+            previous_rotation = odometry["rotation"]
+
+            cosine_similarity = similarity_model.cosine_image_text(rgb, prompt)
+            # This has to be saved for END logic
+            # Find the direction_related_to_robot_frontier()
+
+            if cosine_similarity > threshold:  #object detected
+                pass # def_target_rho_theta()
+                navstate = NavigationState.NAVIGATION
+                state_stage = StateStage.START
+
+            elif cosine_similarity < threshold: # not object detected. 
+                state_stage = StateStage.INACTION
+
+        elif state_stage == StateStage.INACTION:
+
+            current_rotation = odometry["rotation"]
+            current_angle, previous_angle = 0, 0 #need to find from rotation. get_current_angle(previous_rotation, current_rotation)
+
+            anglular_velocity = 0 # compute using angle PID controller (goal_angle, current_angle)
+            angular_velocity_threshold = 0 
+            if anglular_velocity < angular_velocity_threshold:
+                pass # Should stop continuing rotation. 
+                rotation_step_count += 1
+                # find cosine similarity
+                # find GD-SAM 
+                # find the distance_related_to_robot_frontier
+
+                # if object is in GD-SAM send to navigation 
+                # else append cosine similarity and continue navigation. 
+                #   : Have set a new goal_angle += rotation_per_step 
+
+        elif state_stage == StateStage.END:
+            pass
+
+            # Select best direction from the cosine_similarities and distance logic
+            # Pass it to navigation. 
+
+        # if cosine_similarity > threshold:
+        #     # Move forward in exploration state
+        #     go2_ctrl.base_vel_cmd_input[0] = torch.tensor([velocity_value, 0.0, 0.0], dtype=torch.float32)
+        #     navstate = NavigationState.NAVIGATION
+        # else:
+        #     # Continue exploring by turning in place
+        #     go2_ctrl.base_vel_cmd_input[0] = torch.tensor([0.0, 0.0, velocity_value], dtype=torch.float32)
 
     elif navstate == NavigationState.NAVIGATION:
 
