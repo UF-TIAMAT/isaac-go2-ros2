@@ -14,7 +14,7 @@ from datetime import datetime
 from geometry_msgs.msg import PoseStamped
 import math
 from enum import Enum
-from scipy.spation.transform import Rotation as R
+from scipy.spatial.transform import Rotation as R
 
 from pid_controller import PositionPIDController, AnglePIDController
 
@@ -118,6 +118,9 @@ class Controller(Node):
         print(f"Entering State: {self.navigation_state} and PID State: {self.pid_state}")
         print(f"Current Pose: {self.current_pose}")
 
+        # FIXME: Got a current pose none at the beginning. what is the reason?
+        if self.current_pose is None:
+            return
 
         if self.navigation_state == NavigationState.EXPLORATION:
             if self.pid_state == PIDState.START:
@@ -126,13 +129,13 @@ class Controller(Node):
                 # Set PID rotation target to 30 degree and change state to continue. 
                 # Find the angle velocity command. 
 
-                self.step_start_orientation = self.current_pose.orientation
+                self.step_start_orientation = self.current_pose.pose.orientation
                 self.exploration_rotate_step_count += 1
 
                 if not self.is_sim_started:
 
                     self.is_sim_started = True
-                    self.sim_start_orientation = self.current_pose.orientation
+                    self.sim_start_orientation = self.current_pose.pose.orientation
 
                     angular_velocity = self.angle_pid.compute_angular_velocity(
                         goal_angle=self.angle_step,
@@ -156,6 +159,7 @@ class Controller(Node):
                 self.pid_state = PIDState.CONTINUE
 
                 # Set the angular velocity command
+                print("Angular Velocity type: ", type(angular_velocity))
                 cmd.angular.z = angular_velocity
 
                 # Step 2
@@ -167,7 +171,7 @@ class Controller(Node):
                 # find the angular error 
                 # if angular error is small ignore and set to START
 
-                self.step_current_orientation = self.current_pose.orientation
+                self.step_current_orientation = self.current_pose.pose.orientation
 
                 current_angle = self.get_current_angle(self.step_current_orientation, self.step_start_orientation)
 
@@ -178,8 +182,10 @@ class Controller(Node):
 
                 if angular_velocity < self.rotate_step_threshold:
                     self.pid_state = PIDState.START
-                    angular_velocity = 0
+                    angular_velocity = 0.0
 
+
+                print("Angular Velocity type: ", type(angular_velocity))
                 cmd.angular.z = angular_velocity
 
         elif self.navigation_state == NavigationState.NAVIGATION:
@@ -240,7 +246,7 @@ class Controller(Node):
         quaternion_orientation = [orientation.x, orientation.y, orientation.z, orientation.w]
         rotation = R.from_quat(quaternion_orientation)
 
-        yaw = r.as_euler("zyx", degrees=False)[0]
+        yaw = rotation.as_euler("zyx", degrees=False)[0]
 
         return yaw 
     
