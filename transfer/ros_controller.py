@@ -159,7 +159,6 @@ class Controller(Node):
                 self.pid_state = PIDState.CONTINUE
 
                 # Set the angular velocity command
-                print("Angular Velocity type: ", type(angular_velocity))
                 cmd.angular.z = angular_velocity
 
                 # Step 2
@@ -184,8 +183,6 @@ class Controller(Node):
                     self.pid_state = PIDState.START
                     angular_velocity = 0.0
 
-
-                print("Angular Velocity type: ", type(angular_velocity))
                 cmd.angular.z = angular_velocity
 
         elif self.navigation_state == NavigationState.NAVIGATION:
