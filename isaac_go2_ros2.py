@@ -5,10 +5,6 @@ import torch
 import time
 import math
 import argparse
-import yaml
-from PIL import Image
-from datetime import datetime
-
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
@@ -34,12 +30,8 @@ import omni
 import carb
 import go2.go2_ctrl as go2_ctrl
 import ros2.go2_ros2_bridge as go2_ros2_bridge
-from transfer.navigation import vlfm_navigation, NavigationState
-from transfer.cosine_similarity import HFBLIP2ImageTextRetrieval
 
 FILE_PATH = os.path.join(os.path.dirname(__file__), "cfg")
-
-
 @hydra.main(config_path=FILE_PATH, config_name="sim", version_base=None)
 def run_simulator(cfg):
 
@@ -51,8 +43,6 @@ def run_simulator(cfg):
     go2_ctrl.init_base_vel_cmd(cfg.num_envs)
     # env, policy = go2_ctrl.get_rsl_flat_policy(go2_env_cfg)
     env, policy = go2_ctrl.get_rsl_rough_policy(go2_env_cfg)
-
-    similarity_model = HFBLIP2ImageTextRetrieval()
 
     # Simulation environment
     if (cfg.env_name == "obstacle-dense"):
@@ -69,6 +59,10 @@ def run_simulator(cfg):
         sim_env.create_warehouse_shelves_env() # warehouse shelves
     elif (cfg.env_name == "full-warehouse"):
         sim_env.create_full_warehouse_env() # full warehouse
+    elif (cfg.env_name == "hospital"):
+        sim_env.create_hospital_env() # hospital
+    elif (cfg.env_name == "grid"):
+        sim_env.create_grid_env() # grid
 
     # Sensor setup
     sm = go2_sensors.SensorManager(cfg.num_envs)
@@ -87,88 +81,14 @@ def run_simulator(cfg):
     # Run simulation
     sim_step_dt = float(go2_env_cfg.sim.dt * go2_env_cfg.decimation)
     obs, _ = env.reset()
-    navigation_state = NavigationState.EXPLORATION
-
-    # # Limit num steps
-    # max_steps = 100
-    # step_count = 0
-
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    logging_file = f"/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/results/August/08-21/{ts}.txt"
-
-
     while simulation_app.is_running():
         start_time = time.time()
-
-        # if step_count >= max_steps:
-        #     break
-
         with torch.inference_mode():            
             # control joints
             actions = policy(obs)
 
             # step the environment
             obs, _, _, _ = env.step(actions)
-
-            threashold = 0.53
-            lin_vel = 1.5 
-            step_count = 0  
-            max_steps = 100
-
-            with open("/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/cfg/debug.yaml", ) as f:
-                            debug_cfg = yaml.safe_load(f)
-
-            # Get RGB and Depth data
-            rgb = cameras[0].get_rgb()
-            depth = cameras[0].get_depth()
-            prompt = debug_cfg["prompt"]   
-
-
-            # Get robot odometry 
-            robot_data = env.unwrapped.scene["unitree_go2"].data
-            odometry = {
-                 "position": robot_data.root_state_w[0, :3], #x, y, z (torch.tensor format)
-                 "rotation": robot_data.root_state_w[0, 3:7], #x, y, z, w (torch.tensor format)
-                 "linear_velocity": robot_data.root_lin_vel_b[0], #x, y, z (torch.tensor format)
-                 "angular_velocity": robot_data.root_ang_vel_b[0] #x, y, z (torch.tensor format)
-            }
-
-
-
-            if rgb.shape == (480, 640, 3):
-                 navigation_state = vlfm_navigation(rgb, depth, prompt, navigation_state, similarity_model, threashold, odometry, logging_file)
-                
-
-            # NOTE: This for debugging purposes only 
-        
-            # if rgb.shape == (480, 640, 3):
-
-            #     PROMPT = debug_cfg["prompt"]
-
-            #     cosine_similarity = similarity_model.cosine_image_text(cameras[0].get_rgb(), PROMPT)
-            #     go2_ctrl.base_vel_cmd_input[0] = torch.tensor([lin_vel, 0, 0], dtype=torch.float32)
-
-            #     print(f"\rCosine similarity: {cosine_similarity:.4f} - {PROMPT}", end='', flush=True)
-
-            #     if cosine_similarity > threashold:
-            #         # Move forward
-            #         pass
-
-            #     if debug_cfg["debug"]:
-            #         step_count += 1
-
-            #         if step_count < max_steps:
-            #             ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            #             # Image.fromarray(rgb).save(f"/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/results/August/08-18/rgb/frame_{ts}.png")
-            #             with open("/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/results/August/08-18/debug.txt", "a") as f:
-            #                 f.write(f"{ts} - Cosine similarity: {cosine_similarity:.4f} - {PROMPT}\n")
-            #     else:
-            #         step_count = 0
-            
-
-
-
-
 
             # # ROS2 data
             dm.pub_ros2_data()
