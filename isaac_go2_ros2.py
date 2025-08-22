@@ -93,6 +93,9 @@ def run_simulator(cfg):
     # max_steps = 100
     # step_count = 0
 
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logging_file = f"/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/results/August/08-21/{ts}.txt"
+
 
     while simulation_app.is_running():
         start_time = time.time()
@@ -107,7 +110,7 @@ def run_simulator(cfg):
             # step the environment
             obs, _, _, _ = env.step(actions)
 
-            threashold = 0.45    
+            threashold = 0.53
             lin_vel = 1.5 
             step_count = 0  
             max_steps = 100
@@ -133,7 +136,7 @@ def run_simulator(cfg):
 
 
             if rgb.shape == (480, 640, 3):
-                 navigation_state = vlfm_navigation(rgb, depth, prompt, navigation_state, similarity_model, threashold, odometry)
+                 navigation_state = vlfm_navigation(rgb, depth, prompt, navigation_state, similarity_model, threashold, odometry, logging_file)
                 
 
             # NOTE: This for debugging purposes only 
