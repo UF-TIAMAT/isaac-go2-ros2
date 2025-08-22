@@ -13,6 +13,19 @@ import os
 from datetime import datetime
 from geometry_msgs.msg import PoseStamped
 import math
+from enum import Enum
+from scipy.spation.transform import Rotation as R
+
+from pid_controller import PositionPIDController, AnglePIDController
+
+class NavigationState(Enum):
+    EXPLORATION = 1
+    NAVIGATION = 2
+    STOP = 3
+
+class PIDState(Enum):
+    START = 1
+    CONTINUE = 2
 
 class Controller(Node):
     def __init__(self):
@@ -55,10 +68,31 @@ class Controller(Node):
         self.forklift_detected = False
         self.is_moving = False
         self.forklift_bbox = None
+        self.is_sim_started = False
         
         # Movement parameters
         self.angular_velocity = 0.5  # rad/s for rotation
         self.detection_interval = 2.0  # seconds between detections
+
+        # PID Controllers
+        self.angle_pid = AnglePIDController(kp=1.0, ki=0.0, kd=0.1, dt=0.1, max_angular_velocity=1.0)
+        self.position_pid = PositionPIDController(kp=0.5, ki=0.0, kd=0.05, dt=0.1, max_linear_velocity=1.0)
+
+        # Navigation States
+        self.navigation_state = NavigationState.EXPLORATION
+        self.pid_state = PIDState.START
+        self.target_position = None
+
+        # Angle PID Controller variables
+        self.sim_start_orientation = None
+        self.angle_step = np.pi/6
+        self.step_start_orientation = None
+        self.step_current_orientation = None
+        self.rotate_step_threshold = 0.01
+
+        # Parameters related to initial exploration rotation. 
+        self.max_exploration_rotate_step_count = int(2 * np.pi/ self.angle_step) + 1
+        self.exploration_rotate_step_count = 0
         
         # Create output directory for saved images
         self.output_dir = "forklift_detections"
@@ -71,13 +105,101 @@ class Controller(Node):
         # )
         
         # # Timer for movement control
-        # self.movement_timer = self.create_timer(0.1, self.movement_control)
+        self.movement_timer = self.create_timer(0.1, self.movement_control)
         
         self.get_logger().info("Go-2 Forklift Controller initialized")
         self.get_logger().info("Starting rotation to search for forklift...")
 
+    def movement_control(self):
+        """Control robot movement"""
+
+        cmd = Twist()
+
+        print(f"Entering State: {self.navigation_state} and PID State: {self.pid_state}")
+        print(f"Current Pose: {self.current_pose}")
+
+
+        if self.navigation_state == NavigationState.EXPLORATION:
+            if self.pid_state == PIDState.START:
+                # Step 1
+                # register the initial rotation/position if the very first time 
+                # Set PID rotation target to 30 degree and change state to continue. 
+                # Find the angle velocity command. 
+
+                self.step_start_orientation = self.current_pose.orientation
+                self.exploration_rotate_step_count += 1
+
+                if not self.is_sim_started:
+
+                    self.is_sim_started = True
+                    self.sim_start_orientation = self.current_pose.orientation
+
+                    angular_velocity = self.angle_pid.compute_angular_velocity(
+                        goal_angle=self.angle_step,
+                        curr_angle=0.0
+                    )
+
+                elif self.exploration_rotate_step_count == self.max_exploration_rotate_step_count:
+                    # Check whether rotated entire 360 
+                    # if rotated move to navigation stage. 
+
+                    self.navigation_state = NavigationState.NAVIGATION
+                    self.pid_state = PIDState.START
+                    angular_velocity = 0.0
+                
+                else:
+                    angular_velocity = self.angle_pid.compute_angular_velocity(
+                        goal_angle=self.angle_step,
+                        curr_angle=0.0
+                    )
+
+                self.pid_state = PIDState.CONTINUE
+
+                # Set the angular velocity command
+                cmd.angular.z = angular_velocity
+
+                # Step 2
+                # Add object detection in the start
+                # If detected change the state to NAVIGATION
+
+            elif self.pid_state == PIDState.CONTINUE:
+                # input current rotation and and goal angle
+                # find the angular error 
+                # if angular error is small ignore and set to START
+
+                self.step_current_orientation = self.current_pose.orientation
+
+                current_angle = self.get_current_angle(self.step_current_orientation, self.step_start_orientation)
+
+                angular_velocity = self.angle_pid.compute_angular_velocity(
+                    goal_angle=self.angle_step,
+                    curr_angle=current_angle
+                )
+
+                if angular_velocity < self.rotate_step_threshold:
+                    self.pid_state = PIDState.START
+                    angular_velocity = 0
+
+                cmd.angular.z = angular_velocity
+
+        elif self.navigation_state == NavigationState.NAVIGATION:
+
+            if self.pid_state == PIDState.START:
+                cmd = self.get_null_twist()
+
+            elif self.pid_state == PIDState.CONTINUE:
+                cmd = self.get_null_twist()
+
+        elif self.navigation_state == NavigationState.STOP:
+            cmd = self.get_null_twist()
+
+        print(f"Exiting State: {self.navigation_state} and PID State: {self.pid_state}")
+        print(f"Twist command: {cmd}")
+        self.cmd_vel_pub.publish(cmd)
+
     def image_callback(self, msg):
         """Callback for receiving camera images"""
+
         try:
             # Convert ROS image to OpenCV format
             self.current_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
@@ -86,6 +208,7 @@ class Controller(Node):
 
     def depth_image_callback(self, msg):
         """Callback for receiving depth images"""
+
         try:
             # Convert ROS depth image to OpenCV format (typically 16-bit or 32-bit)
             self.current_depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="16UC1")
@@ -94,7 +217,43 @@ class Controller(Node):
 
     def pose_callback(self, msg):
         """Callback for receiving robot pose"""
+
         self.current_pose = msg
+
+    def get_null_twist(self):
+        """Get a null twist message"""
+
+        cmd = Twist()
+        cmd.linear.x = 0.0
+        cmd.linear.y = 0.0
+        cmd.linear.z = 0.0
+        cmd.angular.x = 0.0
+        cmd.angular.y = 0.0
+        cmd.angular.z = 0.0
+
+        return cmd
+    
+
+    def get_yaw_from_orientation(self, orientation):
+        """Convert orientation to yaw angle around z-axis"""
+
+        quaternion_orientation = [orientation.x, orientation.y, orientation.z, orientation.w]
+        rotation = R.from_quat(quaternion_orientation)
+
+        yaw = r.as_euler("zyx", degrees=False)[0]
+
+        return yaw 
+    
+    def get_current_angle(self, current_orientation, start_orientation):
+        """Calculate the current angle based on start orientation and current orientation"""
+
+        start_yaw = self.get_yaw_from_orientation(start_orientation)
+        current_yaw = self.get_yaw_from_orientation(current_orientation)
+
+        # Calculate the angle difference
+        angle_diff = current_yaw - start_yaw
+
+        return angle_diff
 
     def stop_robot(self):
         """Stop the robot completely"""
