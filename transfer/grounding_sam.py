@@ -9,6 +9,9 @@ import time
 
 import cv2
 
+# Reuse your existing lightweight HTTP wrapper utils
+from server_wrapper import ServerMixin, host_model, send_request, str_to_image
+
 @dataclass
 class BoundingBox:
     xmin: int
@@ -47,7 +50,8 @@ class GroundingSAM:
             polygon_refinement: bool = False,
         ):
 
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cpu"
         self.object_detector = pipeline(model=detector_id, task="zero-shot-object-detection", device=self.device)
         self.segmentator = AutoModelForMaskGeneration.from_pretrained(segmenter_id).to(self.device)
         self.processor = AutoProcessor.from_pretrained(segmenter_id)
@@ -120,6 +124,7 @@ class GroundingSAM:
         image: Image.Image,
         labels: List[str],
     ) -> List[Dict[str, Any]]:
+
         """
         Use Grounding DINO to detect a set of labels in an image in a zero-shot fashion.
         """
@@ -142,6 +147,7 @@ class GroundingSAM:
         """
         Use Segment Anything (SAM) to generate masks given an image + a set of bounding boxes.
         """
+
         # device = "cuda" if torch.cuda.is_available() else "cpu"
         # segmenter_id = segmenter_id if segmenter_id is not None else "facebook/sam-vit-base"
 
@@ -152,6 +158,7 @@ class GroundingSAM:
         inputs = self.processor(images=image, input_boxes=boxes, return_tensors="pt").to(self.device)
 
         outputs = self.segmentator(**inputs)
+
         masks = self.processor.post_process_masks(
             masks=outputs.pred_masks,
             original_sizes=inputs.original_sizes,
@@ -177,37 +184,102 @@ class GroundingSAM:
 
             return np.array(image), detections
 
+
+def gd_sam_annotate(image: Union[Image.Image, np.ndarray], detection_results: List[DetectionResult]) -> np.ndarray:
+    # Convert PIL Image to OpenCV format
+    image_cv2 = np.array(image) if isinstance(image, Image.Image) else image
+    image_cv2 = cv2.cvtColor(image_cv2, cv2.COLOR_RGB2BGR)
+
+    # Iterate over detections and add bounding boxes and masks
+    for detection in detection_results:
+        label = detection.label
+        score = detection.score
+        box = detection.box
+        mask = detection.mask
+
+        # Sample a random color for each detection
+        color = np.random.randint(0, 256, size=3)
+
+        # Draw bounding box
+        cv2.rectangle(image_cv2, (box.xmin, box.ymin), (box.xmax, box.ymax), color.tolist(), 2)
+        cv2.putText(image_cv2, f'{label}: {score:.2f}', (box.xmin, box.ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color.tolist(), 2)
+
+        # If mask is available, apply it
+        if mask is not None:
+            # Convert mask to uint8
+            mask_uint8 = (mask * 255).astype(np.uint8)
+            contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(image_cv2, contours, -1, color.tolist(), 2)
+
+    return cv2.cvtColor(image_cv2, cv2.COLOR_BGR2RGB)
+
+
+class GDSAMClient:
+    def __init__(self, port:int = 12183):
+        self.url = f"http://localhost:{port}/gdsam"
+
+    def detections(self, image: np.ndarray, target_prompt: str):
+        print(f"GDSAMClient.detect_and_segment: {image.shape}, {target_prompt}" )
+        response = send_request(self.url, image=image, target_prompt=target_prompt)
+
 if __name__ == "__main__":
 
-    start = time.time()
+    import argparse
 
-    image_url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-    labels = ["a cat.", "a remote control."]
-    threshold = 0.3
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=12183)
+    args = parser.parse_args()
 
-    detector_id = "IDEA-Research/grounding-dino-tiny"
-    segmenter_id = "facebook/sam-vit-base"
+    class GroundingSAMServer(ServerMixin, GroundingSAM):
+        def __init__(self, **kwargs):
+            GroundingSAM.__init__(self, **kwargs)
+            ServerMixin.__init__(self)
 
-    image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
+        def process_payload(self, payload):
+            img = str_to_image(payload["image"])
+            img = Image.fromarray(img)
+            target_object = [payload["target_prompt"]]
+            _, detections = self.grounded_segmentation(img, target_object)
 
-    grounding_sam = GroundingSAM()
+            # Debug detections
+            if len(detections) > 0: 
+                response ={}
+                response["labels"] = []
+                response["scores"] = []
+                response["boxes"] = []
+                for detection in detections:
 
-    image, detections = grounding_sam.grounded_segmentation(image, labels)
+                    response["labels"].append(detection.label)
+                    response["scores"].append(detection.score)
+                    response["boxes"].append(detection.box.xyxy)
 
-    # image, detections = grounded_segmentation(
-    #     image,
-    #     labels,
-    #     threshold,
-    #     polygon_refinement=True,
-    #     detector_id=detector_id,
-    #     segmenter_id=segmenter_id
-    # )
+            return {"response": response}
 
-    end = time.time()
+    server = GroundingSAMServer()
+    print("Model loaded!")
+    print(f"Hosting on http://localhost:{args.port}")
+    host_model(server, "gdsam", port=args.port)
 
-    print(f"Time taken: {end - start:.2f} seconds")
+    
+    # GROUNDING SAM TEST
 
-    print(f"Found {len(detections)} objects.")
+    # image_url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+    # labels = ["a cat.", "a remote control."]
+    # threshold = 0.3
 
+    # detector_id = "IDEA-Research/grounding-dino-tiny"
+    # segmenter_id = "facebook/sam-vit-base"
 
+    # image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
+
+    # grounding_sam = GroundingSAM()
+
+    # start = time.time()
+
+    # image, detections = grounding_sam.grounded_segmentation(image, labels)
+
+    # end = time.time()
+
+    # print(f"Time taken: {end - start:.2f} seconds")
+    # print(f"Found {len(detections)} objects.")
 
