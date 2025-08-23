@@ -50,8 +50,7 @@ class GroundingSAM:
             polygon_refinement: bool = False,
         ):
 
-        # self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = "cpu"
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.object_detector = pipeline(model=detector_id, task="zero-shot-object-detection", device=self.device)
         self.segmentator = AutoModelForMaskGeneration.from_pretrained(segmenter_id).to(self.device)
         self.processor = AutoProcessor.from_pretrained(segmenter_id)
@@ -213,14 +212,6 @@ def gd_sam_annotate(image: Union[Image.Image, np.ndarray], detection_results: Li
 
     return cv2.cvtColor(image_cv2, cv2.COLOR_BGR2RGB)
 
-
-class GDSAMClient:
-    def __init__(self, port:int = 12183):
-        self.url = f"http://localhost:{port}/gdsam"
-
-    def detections(self, image: np.ndarray, target_prompt: str):
-        print(f"GDSAMClient.detect_and_segment: {image.shape}, {target_prompt}" )
-        response = send_request(self.url, image=image, target_prompt=target_prompt)
 
 if __name__ == "__main__":
 

@@ -15,8 +15,11 @@ from geometry_msgs.msg import PoseStamped
 import math
 from enum import Enum
 from scipy.spatial.transform import Rotation as R
+# import matplotlib.pyplot as plt
+# from PIL import Image
 
 from pid_controller import PositionPIDController, AnglePIDController
+from server_wrapper import send_request
 
 class NavigationState(Enum):
     EXPLORATION = 1
@@ -61,7 +64,9 @@ class Controller(Node):
 
         # CV Bridge for image conversion
         self.bridge = CvBridge()
-        
+
+        # Grounding SAM for object detection and segmentation
+        self.grounding_sam = GDSAMClient()
 
         # Control variables
         self.current_image = None
@@ -94,11 +99,14 @@ class Controller(Node):
         # Parameters related to initial exploration rotation. 
         self.max_exploration_rotate_step_count = int(2 * np.pi/ self.angle_step) + 1
         self.exploration_rotate_step_count = 0
+
+        # Create object detection class type
+        self.target_object = "forklift."
         
         # Create output directory for saved images
-        self.output_dir = "forklift_detections"
+        self.output_dir = f"detections/{self.target_object}"
         os.makedirs(self.output_dir, exist_ok=True)
-        
+
         # # Timer for periodic forklift detection
         # self.detection_timer = self.create_timer(
         #     self.detection_interval, 
@@ -139,6 +147,20 @@ class Controller(Node):
                 # Reset PID terms
                 self.angle_pid.prev_error = 0.0
                 self.angle_pid.integral = 0.0
+
+                # Save the current image for debugging.
+                # ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                response = self.grounding_sam.detections(image=np.array(self.current_image), target_prompt=self.target_object)
+                # if self.current_image is not None:
+                #     # print("Current Image type: ", type(self.current_image))conda 
+                #     detections = self.grounding_sam.grounded_segmentation(
+                #         Image.fromarray(self.current_image), 
+                #         [self.target_object]
+                #     )
+
+                #     annotated_image = gd_sam_annotate(self.current_image, detections)
+                #     plt.imsave(f"{self.output_dir}/{ts}.png", annotated_image)
+
 
                 if not self.is_sim_started:
 
@@ -321,6 +343,13 @@ class Controller(Node):
             )
             self.get_logger().info(f"📍 Final position reached after traveling {final_distance:.2f} meters")
 
+class GDSAMClient:
+    def __init__(self, port:int = 12183):
+        self.url = f"http://localhost:{port}/gdsam"
+
+    def detections(self, image: np.ndarray, target_prompt: str):
+        print(f"GDSAMClient.detect_and_segment: {image.shape}, {target_prompt}" )
+        response = send_request(self.url, image=image, target_prompt=target_prompt)
 
 def main(args=None):
     # Initialize ROS2
@@ -343,6 +372,8 @@ def main(args=None):
             controller.stop_robot()
             controller.destroy_node()
         rclpy.shutdown()
+
+
 
 if __name__ == '__main__':
     main()
