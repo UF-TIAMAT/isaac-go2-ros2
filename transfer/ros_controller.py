@@ -26,6 +26,7 @@ class NavigationState(Enum):
 class PIDState(Enum):
     START = 1
     CONTINUE = 2
+    END = 3
 
 class Controller(Node):
     def __init__(self):
@@ -75,7 +76,7 @@ class Controller(Node):
         self.detection_interval = 2.0  # seconds between detections
 
         # PID Controllers
-        self.angle_pid = AnglePIDController(kp=1.0, ki=0.0, kd=0.1, dt=0.1, max_angular_velocity=1.0)
+        self.angle_pid = AnglePIDController(kp=2.0, ki=0.0, kd=0.1, dt=0.1, max_angular_velocity=1.0)
         self.position_pid = PositionPIDController(kp=0.5, ki=0.0, kd=0.05, dt=0.1, max_linear_velocity=1.0)
 
         # Navigation States
@@ -116,7 +117,9 @@ class Controller(Node):
         cmd = Twist()
 
         print(f"Entering State: {self.navigation_state} and PID State: {self.pid_state}")
-        print(f"Current Pose: {self.current_pose}")
+        # print(f"Current Pose: {self.current_pose}")
+
+        print("Exploration Rotate Step Count: ", self.exploration_rotate_step_count)
 
         # FIXME: Got a current pose none at the beginning. what is the reason?
         if self.current_pose is None:
@@ -131,6 +134,7 @@ class Controller(Node):
 
                 self.step_start_orientation = self.current_pose.pose.orientation
                 self.exploration_rotate_step_count += 1
+                self.step_end_coordinates = None
 
                 if not self.is_sim_started:
 
@@ -172,18 +176,40 @@ class Controller(Node):
 
                 self.step_current_orientation = self.current_pose.pose.orientation
 
+                
+
                 current_angle = self.get_current_angle(self.step_current_orientation, self.step_start_orientation)
+
+                print(f"Step angle: {self.angle_step}")
+                print(f"Current angle: {current_angle}")
 
                 angular_velocity = self.angle_pid.compute_angular_velocity(
                     goal_angle=self.angle_step,
                     curr_angle=current_angle
                 )
-
-                if angular_velocity < self.rotate_step_threshold:
-                    self.pid_state = PIDState.START
+                
+                # Check this logic? Why not changing
+                angle_diff = abs(self.angle_step - current_angle)
+                print("Angle Difference: ",  angle_diff)
+                if angle_diff < self.rotate_step_threshold:
+                    self.pid_state = PIDState.END
                     angular_velocity = 0.0
 
+                    self.step_end_coordinates = np.array([self.current_pose.pose.position.x, self.current_pose.pose.position.y])
+                
+
                 cmd.angular.z = angular_velocity
+
+            elif self.pid_state == PIDState.END:
+                # Stop the robot 
+                # Change the state to START
+                cmd = self.get_null_twist()
+                cmd.linear.x = 1.0 
+                current_coordinates = np.array([self.current_pose.pose.position.x, self.current_pose.pose.position.y])
+
+                distance = np.linalg.norm(current_coordinates - self.step_end_coordinates)
+                if distance > 0.25:
+                    self.pid_state = PIDState.START
 
         elif self.navigation_state == NavigationState.NAVIGATION:
 
@@ -253,8 +279,14 @@ class Controller(Node):
         start_yaw = self.get_yaw_from_orientation(start_orientation)
         current_yaw = self.get_yaw_from_orientation(current_orientation)
 
+        print("Start yaw: ", start_yaw)
+        print("Current yaw: ", current_yaw)
+
         # Calculate the angle difference
         angle_diff = current_yaw - start_yaw
+
+        # Wrap the angle difference to the range [-pi, pi]
+        angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi
 
         return angle_diff
 
