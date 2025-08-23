@@ -76,7 +76,7 @@ class Controller(Node):
         self.detection_interval = 2.0  # seconds between detections
 
         # PID Controllers
-        self.angle_pid = AnglePIDController(kp=2.0, ki=0.0, kd=0.1, dt=0.1, max_angular_velocity=1.0)
+        self.angle_pid = AnglePIDController(kp=2.0, ki=0.05, kd=0.1, dt=0.1, max_angular_velocity=1.0)
         self.position_pid = PositionPIDController(kp=0.5, ki=0.0, kd=0.05, dt=0.1, max_linear_velocity=1.0)
 
         # Navigation States
@@ -135,6 +135,10 @@ class Controller(Node):
                 self.step_start_orientation = self.current_pose.pose.orientation
                 self.exploration_rotate_step_count += 1
                 self.step_end_coordinates = None
+
+                # Reset PID terms
+                self.angle_pid.prev_error = 0.0
+                self.angle_pid.integral = 0.0
 
                 if not self.is_sim_started:
 
