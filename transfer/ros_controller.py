@@ -96,12 +96,22 @@ class Controller(Node):
         self.step_current_orientation = None
         self.rotate_step_threshold = 0.01
 
+        # Linear PID Controller variables
+        self.linear_step = 1
+        self.object_distance_threshold = 1.0
+        self.linear_step_threshold = 0.05
+        self.is_beeline_enabled = False
+
         # Parameters related to initial exploration rotation. 
         self.max_exploration_rotate_step_count = int(2 * np.pi/ self.angle_step) + 1
         self.exploration_rotate_step_count = 0
 
         # Create object detection class type
         self.target_object = "forklift."
+
+        # Beeline-parameters
+        self.bbox = None
+        self.is_depth_region_saved = False
         
         # Create output directory for saved images
         self.output_dir = f"detections/{self.target_object}"
@@ -148,10 +158,17 @@ class Controller(Node):
                 self.angle_pid.prev_error = 0.0
                 self.angle_pid.integral = 0.0
 
-                # Save the current image for debugging.
-                # ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                response = self.grounding_sam.detections(image=np.array(self.current_image), target_prompt=self.target_object)
-                # if self.current_image is not None:
+                # img = Image.fromarray(self.current_image)
+                # img.save(f"{self.output_dir}/input_{ts}.png")
+                # response = response.json()
+
+            
+                # print(response)
+                # print(type(response))
+                # with open(f"{self.output_dir}/response_{ts}.json", "w") as f:
+                #     json.dump(response, f, indent=4)
+
+
                 #     # print("Current Image type: ", type(self.current_image))conda 
                 #     detections = self.grounding_sam.grounded_segmentation(
                 #         Image.fromarray(self.current_image), 
@@ -172,9 +189,12 @@ class Controller(Node):
                         curr_angle=0.0
                     )
 
+                    self.pid_state = PIDState.CONTINUE
+
                 elif self.exploration_rotate_step_count == self.max_exploration_rotate_step_count:
                     # Check whether rotated entire 360 
                     # if rotated move to navigation stage. 
+                    # FIXME: This part needed to be improved.
 
                     self.navigation_state = NavigationState.NAVIGATION
                     self.pid_state = PIDState.START
@@ -186,9 +206,38 @@ class Controller(Node):
                         curr_angle=0.0
                     )
 
-                self.pid_state = PIDState.CONTINUE
+                    self.pid_state = PIDState.CONTINUE
 
-                # Set the angular velocity command
+                
+
+                if self.current_image is not None:
+                    annotated_image = self.current_image.copy()
+                    # Save the current image for debugging.
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    response = self.grounding_sam.detections(image=self.current_image, target_prompt=self.target_object)
+                    scores = response["response"]["scores"]
+                    bboxes = response["response"]["boxes"]
+
+                    if len(scores) > 0 and max(scores) > 0.8:
+                        max_index = scores.index(max(scores))
+                        self.bbox = bboxes[max_index]
+                        self.navigation_state = NavigationState.NAVIGATION
+                        self.pid_state = PIDState.START
+                        self.is_beeline_enabled = True
+                        angular_velocity = 0.0
+
+                        # Save the depth region for debugging
+                        self.is_depth_region_saved = True
+
+                        # Draw bbox on the image
+                        x1, y1, x2, y2 = map(int, self.bbox)
+                        
+                        cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                        cv2.putText(annotated_image, f"{self.target_object} {scores[max_index]:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 2)
+
+                    cv2.imwrite(f"{self.output_dir}/input_{ts}.png", annotated_image)
+
+
                 cmd.angular.z = angular_velocity
 
                 # Step 2
@@ -239,11 +288,175 @@ class Controller(Node):
 
         elif self.navigation_state == NavigationState.NAVIGATION:
 
+            cmd = self.get_null_twist()
+
             if self.pid_state == PIDState.START:
-                cmd = self.get_null_twist()
+                # when stopped first find the distance to the object using depth image 
+
+                
+                # if self.is_depth_region_saved:
+
+                #     obstacle_normalized = cv2.normalize(obstacle_region, None, 0, 255, cv2.NORM_MINMAX)
+                #     obstacle_normalized = obstacle_normalized.astype(np.uint8)
+
+                #     obstacle_inv = 255 - obstacle_normalized
+                #     obstacle_inv = cv2.applyColorMap(obstacle_inv, cv2.COLORMAP_TURBO)
+
+                #     cv2.imwrite(f"{self.output_dir}/obstacle_depth.png", obstacle_inv)
+
+                #     self.is_depth_region_saved = False
+
+                programme_flow = []
+
+                current_pose = np.array([self.current_pose.pose.position.x, self.current_pose.pose.position.y])
+                current_travelled_distance = np.linalg.norm(current_pose - self.target_position)
+                
+                print(f"Current travelled distance from target: {current_travelled_distance}")
+                if current_travelled_distance > 4.0: 
+
+                    self.navigation_state = NavigationState.STOP
+                    self.pid_state = PIDState.START
+
+                if self.is_beeline_enabled:
+
+                    obstacle_region = self.current_depth_image[self.bbox[1]:self.bbox[3], self.bbox[0]:self.bbox[2]]
+                    horizontal_aperture_mm = 20.955
+                    focal_length_mm = 15.0
+                    fov = 2 * math.atan(horizontal_aperture_mm / (2 * focal_length_mm))
+                    object_center = [(self.bbox[0] + self.bbox[2]) // 2, (self.bbox[1] + self.bbox[3]) // 2]
+
+                    distance = np.median(obstacle_region)
+                    self.step_start_position = np.array([self.current_pose.pose.position.x, self.current_pose.pose.position.y])
+
+                    # FIXME: Target angle??
+                    target_angle = (object_center[0] - self.current_image.shape[1] / 2) / self.current_image.shape[1] * fov
+                
+                    self.target_position = self.step_start_position + np.array([
+                        distance * math.cos(target_angle),
+                        distance * math.sin(target_angle)
+                    ])
+
+                    self.is_beeline_enabled = False
+
+                    # Robot is alread within the linear step threshold
+                    if distance < self.object_distance_threshold:
+
+                        print("Block 1")
+                        programme_flow.append("Block 1")
+
+                        self.navigation_state = NavigationState.STOP
+                        self.pid_state = PIDState.START
+
+                    else:
+                        print("Block 2")
+                        programme_flow.append("Block 2")
+
+                        self.step_target_position = self.step_start_position + np.array([
+                            self.linear_step * math.cos(target_angle),
+                            self.linear_step * math.sin(target_angle)
+                        ])
+
+                        self.linear_velocity = self.position_pid.compute_linear_velocity(
+                            target_position=self.step_target_position,
+                            current_position=self.step_start_position
+                        )
+
+                        self.pid_state = PIDState.CONTINUE
+
+                        cmd.linear.x = self.linear_velocity * math.cos(target_angle)
+                        cmd.linear.y = self.linear_velocity * math.sin(target_angle)
+
+                else:
+
+                    print("Block 3")
+                    programme_flow.append("Block 3")
+                    
+                    self.step_start_position = np.array([self.current_pose.pose.position.x, self.current_pose.pose.position.y])
+                    
+                    distance = np.linalg.norm(self.target_position - self.step_start_position)
+
+                    if distance < self.object_distance_threshold:
+                        print("Block 4")
+                        programme_flow.append("Block 4")
+                        self.navigation_state = NavigationState.STOP
+                        self.pid_state = PIDState.START
+
+                    else:
+
+                        print("Block 5")
+                        programme_flow.append("Block 5")
+
+                        target_angle = math.atan2(self.target_position[1] - self.step_start_position[1], self.target_position[0] - self.step_start_position[0])
+
+                        self.step_target_position = self.step_start_position + np.array([
+                            self.linear_step * math.cos(target_angle),
+                            self.linear_step * math.sin(target_angle)
+                        ])
+
+
+                        self.linear_velocity = self.position_pid.compute_linear_velocity(
+                            target_position=self.step_target_position,
+                            current_position=self.step_start_position
+                        )
+
+                        cmd.linear.x = self.linear_velocity * math.cos(target_angle)
+                        cmd.linear.y = self.linear_velocity * math.sin(target_angle)
+                        self.pid_state = PIDState.CONTINUE
+
+                with open("/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/transfer/detections/debug.txt", "a") as f:
+                    f.write(f"Navstate: {self.navigation_state}, PID State: {self.pid_state}\n")
+                    f.write(f"BBOX: {self.bbox}\n")
+                    f.write(f"Object center: {object_center}\n")
+                    f.write(f"Object distance: {distance}\n")
+                    f.write(f"Target angle: {target_angle}\n")
+                    f.write(f"Current position: {self.step_start_position}\n")
+                    f.write(f"Target position: {self.target_position}\n")
+                    f.write(f"Step target position: {self.step_target_position}\n")
+                    f.write(f"Programme flow: {programme_flow}\n")
+                    # f.write(f"Linear distance: {linear_distance}\n")
+
 
             elif self.pid_state == PIDState.CONTINUE:
+
+                programme_flow = []
+
+                print("Block 6")
+                programme_flow.append("Block 6")
                 cmd = self.get_null_twist()
+
+                self.linear_velocity = self.position_pid.compute_linear_velocity(
+                    target_position=self.step_target_position,
+                    current_position=np.array([self.current_pose.pose.position.x, self.current_pose.pose.position.y])
+                )
+
+                # Need to check this logic again.
+                target_angle = math.atan2(self.step_target_position[1] - self.step_start_position[1], self.step_target_position[0] - self.step_start_position[0])
+
+                cmd.linear.x = self.linear_velocity * math.cos(target_angle)
+                cmd.linear.y = self.linear_velocity * math.sin(target_angle)
+
+                linear_distance = np.linalg.norm(self.step_target_position - np.array([self.current_pose.pose.position.x, self.current_pose.pose.position.y]))
+                if linear_distance < self.linear_step_threshold:
+
+                    print("Block 7")
+                    programme_flow.append("Block 7")
+                    self.pid_state = PIDState.START
+
+                with open("/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/transfer/detections/debug.txt", "a") as f:
+                    f.write(f"Navstate: {self.navigation_state}, PID State: {self.pid_state}\n")
+                    f.write(f"Target Position: {self.step_target_position}\n")
+                    current_pose = [self.current_pose.pose.position.x, self.current_pose.pose.position.y]
+                    f.write(f"Current Position: {current_pose}\n")
+                    f.write(f"Linear distance: {linear_distance}\n")
+                    f.write(f"Programme flow: {programme_flow}\n")
+
+
+            elif self.pid_state == PIDState.END:
+                print("Block 8")
+
+                self.navigation_state = NavigationState.STOP
+                self.pid_state = PIDState.START
+
 
         elif self.navigation_state == NavigationState.STOP:
             cmd = self.get_null_twist()
@@ -350,6 +563,7 @@ class GDSAMClient:
     def detections(self, image: np.ndarray, target_prompt: str):
         print(f"GDSAMClient.detect_and_segment: {image.shape}, {target_prompt}" )
         response = send_request(self.url, image=image, target_prompt=target_prompt)
+        return response
 
 def main(args=None):
     # Initialize ROS2

@@ -244,6 +244,9 @@ if __name__ == "__main__":
                     response["scores"].append(detection.score)
                     response["boxes"].append(detection.box.xyxy)
 
+            print(len(detections))
+            print(response)
+
             return {"response": response}
 
     server = GroundingSAMServer()
