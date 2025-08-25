@@ -154,22 +154,28 @@ class GroundingSAM:
         # processor = AutoProcessor.from_pretrained(segmenter_id)
 
         boxes = self.get_boxes(detection_results)
-        inputs = self.processor(images=image, input_boxes=boxes, return_tensors="pt").to(self.device)
 
-        outputs = self.segmentator(**inputs)
+        # Critical guard - if no boxes, skip segmentation
+        if len(detection_results) == 0:
+            return None
 
-        masks = self.processor.post_process_masks(
-            masks=outputs.pred_masks,
-            original_sizes=inputs.original_sizes,
-            reshaped_input_sizes=inputs.reshaped_input_sizes
-        )[0]
+        else:
+            inputs = self.processor(images=image, input_boxes=boxes, return_tensors="pt").to(self.device)
 
-        masks = self.refine_masks(masks)
+            outputs = self.segmentator(**inputs)
 
-        for detection_result, mask in zip(detection_results, masks):
-            detection_result.mask = mask
+            masks = self.processor.post_process_masks(
+                masks=outputs.pred_masks,
+                original_sizes=inputs.original_sizes,
+                reshaped_input_sizes=inputs.reshaped_input_sizes
+            )[0]
 
-        return detection_results
+            masks = self.refine_masks(masks)
+
+            for detection_result, mask in zip(detection_results, masks):
+                detection_result.mask = mask
+
+            return detection_results
 
     def grounded_segmentation(
         self,
