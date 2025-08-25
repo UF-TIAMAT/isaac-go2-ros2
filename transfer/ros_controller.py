@@ -98,7 +98,7 @@ class Controller(Node):
 
         # Linear PID Controller variables
         self.linear_step = 1
-        self.object_distance_threshold = 1.0
+        self.object_distance_threshold = 2.5
         self.linear_step_threshold = 0.05
         self.is_beeline_enabled = False
 
@@ -291,34 +291,10 @@ class Controller(Node):
             cmd = self.get_null_twist()
 
             if self.pid_state == PIDState.START:
-                # when stopped first find the distance to the object using depth image 
-
-                
-                # if self.is_depth_region_saved:
-
-                #     obstacle_normalized = cv2.normalize(obstacle_region, None, 0, 255, cv2.NORM_MINMAX)
-                #     obstacle_normalized = obstacle_normalized.astype(np.uint8)
-
-                #     obstacle_inv = 255 - obstacle_normalized
-                #     obstacle_inv = cv2.applyColorMap(obstacle_inv, cv2.COLORMAP_TURBO)
-
-                #     cv2.imwrite(f"{self.output_dir}/obstacle_depth.png", obstacle_inv)
-
-                #     self.is_depth_region_saved = False
 
                 programme_flow = []
 
                 print("Block 0")
-
-                # NOTE: Temp fix
-                # current_pose = np.array([self.current_pose.pose.position.x, self.current_pose.pose.position.y])
-                # current_travelled_distance = np.linalg.norm(current_pose - self.target_position)
-                
-                # print(f"Current travelled distance from target: {current_travelled_distance}")
-                # if current_travelled_distance > 4.0: 
-
-                #     self.navigation_state = NavigationState.STOP
-                #     self.pid_state = PIDState.START
 
                 if self.is_beeline_enabled:
 
@@ -326,7 +302,6 @@ class Controller(Node):
                     horizontal_aperture_mm = 20.955
                     focal_length_mm = 15.0
                     fov = 2 * math.atan(horizontal_aperture_mm / (2 * focal_length_mm))
-
                     print("FOV: ", np.degrees(fov))
 
                     # image shape is by default (480, 640, 3)
@@ -350,8 +325,8 @@ class Controller(Node):
 
                 
                     self.target_position = self.step_start_position + np.array([
-                        distance * math.cos(target_angle + self.robot_initial_yaw),
-                        distance * math.sin(target_angle + self.robot_initial_yaw)
+                        distance * math.cos(target_angle - self.robot_initial_yaw),
+                        distance * math.sin(target_angle - self.robot_initial_yaw)
                     ])
 
                     print("Target position: ", self.target_position)
@@ -379,6 +354,8 @@ class Controller(Node):
                         #     self.linear_step * math.sin(target_angle)
                         # ])
 
+
+                        # NOTE: For beelinging just at target as the end position
                         self.step_target_position = self.target_position
 
                         self.linear_velocity = self.position_pid.compute_linear_velocity(
@@ -398,6 +375,7 @@ class Controller(Node):
                         
                 else:
 
+                    # NOTE: This logic is needed for stepping: Currently not used. 
                     print("Block 3")
                     programme_flow.append("Block 3")
                     
@@ -458,11 +436,13 @@ class Controller(Node):
                 programme_flow.append("Block 6")
                 cmd = self.get_null_twist()
 
-                print("Step target position: ", self.step_target_position)
+                
 
                 # Self.step_start_abs_position should be updated according in the start loop
                 current_position = np.array([self.current_pose.pose.position.x, self.current_pose.pose.position.y])
+                print("Step target position: ", self.step_target_position)
                 print("Current position: ", current_position)
+                print("Target position: ", self.target_position)
 
                 self.linear_velocity = self.position_pid.compute_linear_velocity(
                     target_position=self.step_target_position,
@@ -479,16 +459,18 @@ class Controller(Node):
 
                 print("Linear velocity: ", self.linear_velocity)
                 print("Cmd: ", cmd)
-                print("Step target position: ", self.step_target_position)
+                # print("Step target position: ", self.step_target_position)
 
                 linear_distance = np.linalg.norm(self.step_target_position - current_position)
-                if linear_distance < self.linear_step_threshold:
+
+                print("Linear distance to step target: ", linear_distance)
+                print("Object distance threshold: ", self.object_distance_threshold)
+                if linear_distance < self.object_distance_threshold:
 
                     print("Block 7")
                     programme_flow.append("Block 7")
+                    self.navigation_state = NavigationState.STOP
                     self.pid_state = PIDState.START
-
-                    raise Exception("Stop here")
 
                 with open("/blue/prabhat/duminduaelamurem/wd/isaac_sim/isaac-go2-ros2/transfer/detections/debug.txt", "a") as f:
                     f.write(f"Navstate: {self.navigation_state}, PID State: {self.pid_state}\n")
